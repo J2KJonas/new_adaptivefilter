@@ -28,15 +28,15 @@ d = filtfilt(b, a, d);
 x = filtfilt(b, a, x);
 
 % Calculate initial SNR
-initial_SNR = 10 * log10(sum(x.^2) / sum((x - u).^2));  % The same as 10 * log10(sum(x.^2) / sum((x - d).^2))
+initial_SNR = 10 * log10(sum(x.^2) / sum((x - d).^2));  % The same as 10 * log10(sum(x.^2) / sum((x - d).^2))
 
 %% Parameters
 
 % Rough range - tid 10.52
-mu_values_LMS  = 0:0.05:1;
-mu_values_NLMS = 0:0.05:1;
-filterOrders = 1:25;
-lambda_values  = 0:0.05:1;
+mu_values_LMS = [0.001 0.002 0.005 0.0075 0.01 0.015 0.02 0.025 0.03];
+mu_values_NLMS = [0.001 0.002 0.005 0.0075 0.01 0.02 0.03 0.05];
+lambda_values = [0.90 0.92 0.95 0.97 0.98 0.985 0.99 0.995 0.998];
+filterOrders = [4 8 16 32 40 60 80 100]; 
 enabled = 0;
 
 % Fine range - tid 10.52
@@ -68,7 +68,7 @@ parfor idx = 1:totalIterations
             mu_idx = mod(idx - 1, length(mu_values_LMS)) + 1;
             M = filterOrders(M_idx);
             mu = mu_values_LMS(mu_idx);
-            [y, e] = lms_filter(d, u, M, mu);
+            [y, e] = lms_filter(u, d, M, mu);
             filterName = 'LMS';
         else
             % NLMS
@@ -77,12 +77,12 @@ parfor idx = 1:totalIterations
             mu_idx = mod(adjusted_idx - 1, length(mu_values_NLMS)) + 1;
             M = filterOrders(M_idx);
             mu = mu_values_NLMS(mu_idx);
-            [y, e] = nlms_filter(d, u, M, mu);
+            [y, e] = nlms_filter(u, d, M, mu);
             filterName = 'NLMS';
         end
 
         if all(isfinite(y))
-            snr_val = 10 * log10(sum(x.^2) / sum((x - e).^2));  % e = x - (u - y))
+            snr_val = 10 * log10(sum(x.^2) / sum((x - e).^2));  % e = u - y
             local_result = struct('type', filterName, 'M', M, 'param', mu, 'snr', snr_val);
         end
     else
@@ -94,7 +94,7 @@ parfor idx = 1:totalIterations
         M = filterOrders(M_idx);
         lambda_val = lambda_values(lambda_idx);
 
-        [y, e] = rls_filter(d, u, M, lambda_val);
+        [y, e] = rls_filter(u, d, M, lambda_val);
 
         if all(isfinite(y))
             snr_val = 10 * log10(sum(x.^2) / sum((x - e).^2));
@@ -109,17 +109,24 @@ end
 parfor_progress(0);
 
 %% Find Best Parameters
-bestSNR_LMS = -Inf(1, length(filterOrders));
-bestSNR_NLMS = -Inf(1, length(filterOrders));
-bestSNR_RLS = -Inf(1, length(filterOrders));
+numOrders = length(filterOrders);
 
-optMu_LMS = zeros(1, length(filterOrders));
-optMu_NLMS = zeros(1, length(filterOrders));
-optLambda_RLS = zeros(1, length(filterOrders));
+bestSNR_LMS = -Inf(1, numOrders);
+bestSNR_NLMS = -Inf(1, numOrders);
+bestSNR_RLS = -Inf(1, numOrders);
+
+optMu_LMS = zeros(1, numOrders);
+optMu_NLMS = zeros(1, numOrders);
+optLambda_RLS = zeros(1, numOrders);
 
 for k = 1:totalIterations
     res = results(k);
-    M_idx = res.M;
+    % 🛠 Map filter order (e.g., 4, 8...) to its index in filterOrders array
+    [isFound, M_idx] = ismember(res.M, filterOrders);
+    if  ~isFound
+        warning("Filter order %d not found in filterOrders!", res.M);
+        continue;
+    end
 
     if strcmp(res.type, 'LMS')
         if res.snr > bestSNR_LMS(M_idx)
@@ -138,6 +145,7 @@ for k = 1:totalIterations
         end
     end
 end
+
 
 %% Create Matrix for Best Parameters
 % Pre-allocate matrices for best parameters for each algorithm
@@ -569,7 +577,7 @@ tightfig();
 saveas(gcf, fullfile(foldername, 'Frequency Response of Final Weights - Real Heart.pdf'));
 
 %% LMS Filter Function
-function [y, e, w_hist] = lms_filter(u, d, M, mu)
+function [y, e, w_hist] = lms_filter(d, u, M, mu)
     N = length(u);
     w = zeros(M,1);
     y = zeros(N,1);
@@ -588,7 +596,7 @@ function [y, e, w_hist] = lms_filter(u, d, M, mu)
 end
 
 %% NLMS Filter Function
-function [y, e, w_hist] = nlms_filter(u, d, M, mu)
+function [y, e, w_hist] = nlms_filter(d, u, M, mu)
     N = length(u);
     w = zeros(M,1);
     y = zeros(N,1);
@@ -609,7 +617,7 @@ function [y, e, w_hist] = nlms_filter(u, d, M, mu)
 end
 
 %% RLS Filter Function
-function [y, e, w_hist] = rls_filter(u, d, M, lambda)
+function [y, e, w_hist] = rls_filter(d, u, M, lambda)
     N = length(u);
     w = zeros(M,1); % Initialize filter weights
     y = zeros(N,1);
