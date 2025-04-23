@@ -3,12 +3,12 @@ clear;
 close all;
 
 %% Define the path for the data
-[u, fs] = audioread("C:\Users\eloma\Desktop\Universitet\OneDrive - Aalborg Universitet\Universitet\9. Semester - ES9\Long Thesis\Data from AI heathway\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\primary.wav");   %noise + clean signal
-[d, ~] = audioread("C:\Users\eloma\Desktop\Universitet\OneDrive - Aalborg Universitet\Universitet\9. Semester - ES9\Long Thesis\Data from AI heathway\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\secondary.wav");
-[x, ~] = audioread("C:\Users\eloma\Desktop\Universitet\OneDrive - Aalborg Universitet\Universitet\9. Semester - ES9\Long Thesis\Data from AI heathway\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\ZCH0019.wav");
+[u, fs] = audioread("C:\Users\Jonas E-O\Desktop\Git-Repos\new_adaptivefilter\3_Baseline_Company_Data\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\primary.wav");   %noise + clean signal
+[d, ~] = audioread("C:\Users\Jonas E-O\Desktop\Git-Repos\new_adaptivefilter\3_Baseline_Company_Data\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\secondary.wav");   
+[x, ~] = audioread("C:\Users\Jonas E-O\Desktop\Git-Repos\new_adaptivefilter\3_Baseline_Company_Data\Data_ANC\Experiment_Data\Hospital Ambient Noises\NHS\1\ZCH0019.wav");
 
 %% Define start time for trimming (1.5 seconds)
-start_time = 1.7;  % in seconds
+start_time = 14;  % in seconds
 start_sample = round(start_time * fs);  % Convert time to sample index
 
 %% Trim the signals to start from 1.5 seconds
@@ -28,7 +28,7 @@ d = filtfilt(b, a, d);
 x = filtfilt(b, a, x);
 
 % Calculate initial SNR
-initial_SNR = 10 * log10(sum(x.^2) / sum((x - d).^2));  % The same as 10 * log10(sum(x.^2) / sum((x - d).^2))
+initial_SNR = 10 * log10(sum(x.^2) / sum((x - u).^2));  % The same as 10 * log10(sum(x.^2) / sum((x - d).^2))
 
 %% Parameters
 
@@ -68,7 +68,7 @@ parfor idx = 1:totalIterations
             mu_idx = mod(idx - 1, length(mu_values_LMS)) + 1;
             M = filterOrders(M_idx);
             mu = mu_values_LMS(mu_idx);
-            [y, ~] = lms_filter(u, d, M, mu);
+            [y, e] = lms_filter(d, u, M, mu);
             filterName = 'LMS';
         else
             % NLMS
@@ -77,12 +77,12 @@ parfor idx = 1:totalIterations
             mu_idx = mod(adjusted_idx - 1, length(mu_values_NLMS)) + 1;
             M = filterOrders(M_idx);
             mu = mu_values_NLMS(mu_idx);
-            [y, ~] = nlms_filter(u, d, M, mu);
+            [y, e] = nlms_filter(d, u, M, mu);
             filterName = 'NLMS';
         end
 
         if all(isfinite(y))
-            snr_val = snr(x, x - (u - y));  % e = x - (u - y))
+            snr_val = 10 * log10(sum(x.^2) / sum((x - e).^2));  % e = x - (u - y))
             local_result = struct('type', filterName, 'M', M, 'param', mu, 'snr', snr_val);
         end
     else
@@ -94,10 +94,10 @@ parfor idx = 1:totalIterations
         M = filterOrders(M_idx);
         lambda_val = lambda_values(lambda_idx);
 
-        [y, ~] = rls_filter(u, d, M, lambda_val);
+        [y, e] = rls_filter(d, u, M, lambda_val);
 
         if all(isfinite(y))
-            snr_val = snr(x, x - (u - y));
+            snr_val = 10 * log10(sum(x.^2) / sum((x - e).^2));
             local_result = struct('type', 'RLS', 'M', M, 'param', lambda_val, 'snr', snr_val);
         end
     end
@@ -579,8 +579,8 @@ function [y, e, w_hist] = lms_filter(u, d, M, mu)
 
     for n = 1:N
         u_vec = u_padded(n:n+M-1);  % Current input vector
-        e = d(n) - w' * u_vec; % Error signal
-        w = w + mu * e * u_vec; % Update weights
+        e(n) = d(n) - w' * u_vec; % Error signal
+        w = w + mu * e(n) * u_vec; % Update weights
         y(n) = w' * u_vec;  % Filtered output
         
         w_hist(:, n) = w;
@@ -600,8 +600,8 @@ function [y, e, w_hist] = nlms_filter(u, d, M, mu)
     for n = 1:N
         u_vec = u_padded(n:n+M-1); % Current input vector
         mu1 = mu / (eps + norm(u_vec)^2); % Normalized step size
-        e = d(n) - w' * u_vec; % Error signal
-        w = w + mu1 * e * u_vec; % Update weights
+        e(n) = d(n) - w' * u_vec; % Error signal
+        w = w + mu1 * e(n) * u_vec; % Update weights
         y(n) = w' * u_vec; % Filtered output
         
         w_hist(:, n) = w;
@@ -623,8 +623,8 @@ function [y, e, w_hist] = rls_filter(u, d, M, lambda)
         u_vec = u_padded(n:n+M-1); % Current input vector
         PI = P * u_vec; % Intermediate calculation
         k = PI / (lambda + u_vec' * PI);  % Gain
-        e = d(n) - w' * u_vec; % Error signal
-        w = w + k * e; % Update weights
+        e(n) = d(n) - w' * u_vec; % Error signal
+        w = w + k * e(n); % Update weights
         P = (P - k * u_vec' * P) / lambda; % Update inverse correlation matrix
         y(n) = w' * u_vec; % Filtered output
         

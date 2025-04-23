@@ -1,0 +1,164 @@
+clear
+
+% Load the data file
+load opgave.dat
+
+% Move N samples into the vector "data". It makes a difference where in
+% signal the N samples segment is picked out. We start the segment at
+% sample Q.
+N=128;
+Q=800;
+data(1:N) = opgave(Q:(Q-1)+N);
+
+% Create an N-point Hamming Window
+ham(1:N) = hamming(N);
+
+% Multiply the data segment with the window
+data_h(1:N) = data(1:N).*ham(1:N);
+
+% Model order is p
+p=16;
+
+% Calculate the first p+1 autocorrelation coefficients
+% Do it the manual way...
+for k=1:p+1
+    sum = 0;
+    for n=1:(128-k+1)
+        sum = sum + (data_h(n) * data_h(n+(k-1)));
+    end;
+    r(k) = sum; % Here r denotes the non-normalized autocorrelation
+end;
+
+
+% Solve the set of linear equations Ra=-r using the Levinson-Durbin
+% algorithm
+
+% The matrix "a" contains the filter coefficients for all model orders
+% from 1 to p. Note that the filter coefficients most often are also
+% denoted the "LPC Coefficients".
+a = zeros(p+1,p+1); % (filter-coef. number, model-order) 
+
+% All filters have the first filter coefficient a_0=1
+for i=1:p+1
+    a(i,1)=1;
+end
+
+% And now Levinson-Durbin algorithm -- and here it becomes a bit tricky
+% because Matlab cannot index 0. First entry in a matrix is indexed 1.
+
+% The first residual variance which is E_0 equals r(0) and is placed in the
+% first entry in a vector denoted E.
+E = zeros(1, p+1);
+E(1) = r(1);
+
+% The outer loop of the LD algorithm which counts the model order
+for m=1:p
+    % Conduct the order-recursive update of the LPC coefficients
+    
+    % First calculate the linear combination of the auto-corr. coefficients 
+    sum_linear_comb=0;
+    for k=1:m-1
+        sum_linear_comb = sum_linear_comb + a(m,k+1)*r(m+1-k);
+    end
+    
+    %...and now the reflection (also known as the PARCOR) coefficient
+    parcor(m) = -(r(m+1) + sum_linear_comb)/E(m);
+    
+    % The last filter coefficient in each filter equals the reflection
+    % coefficient 
+    a(m+1,m+1) = parcor(m);
+    
+    % Update the filter (LPC) coefficients
+    for k=1:m-1
+        a(m+1,k+1) = a(m,k+1) + parcor(m)*a(m,m+1-k);
+    end
+    % ...and finally update the residual variance
+    E(m+1) = E(m)*(1-(parcor(m)^2));
+end
+
+a = a';
+
+% Now we conduct the computation of the reflection coefficients using the
+% FIR Lattice filter
+
+% The input to the first Lattice stage is the Hamming weighted signal,
+% data_h. According to the Lattice structure, the two inputs on the stage
+% are shortcut, i.e., ~e_0[n]=e_0[n].
+% For convenience, we denote e[n] as out_f[n] (output forward prediction from
+% previous stage) and ~e[n] as out_b[n] (output backward prediction from
+% previous stage).
+out_f(1:N+1+p) = zeros(1,N+1+p);
+out_b(1:N+1+p) = zeros(1,N+1+p);
+x_f(1:N+1+p) = zeros(1,N+1+p);
+x_b(1:N+1+p) = zeros(1,N+1+p);
+
+% Due to the delay element in the first Lattice stage, the segment needs to
+% be extended by one sample
+
+out_f(1:N) = data_h(1:N);
+out_f(N+1) = 0;
+out_b(1) = 0;
+out_b(2:N+1) = data_h(1:N);
+
+% Based on this input signal, we now calculate p PARCOR coefficients using
+% a slightly modified version of equ. 101 p. 967 on O&S 3rd ed.
+for m=1:p
+    % Reset the numerator and the denominator
+    sum_t=0;
+    sum_n=0;
+    
+    % Calculate the numerator and the denominator using the two sequences
+    for n=1:N+m
+        sum_t = sum_t + out_f(n) * out_b(n);
+        sum_n = sum_n + out_b(n) * out_b(n);
+    end
+    k_lattice(m) = -sum_t/sum_n;
+    
+    % Using now this reflection coefficient, we filter the signal through
+    % the "next" Lattice stage. The output at the forward and backward
+    % prediction terminals are denoted x_f[n] and x_b[n] respectively.
+    for n=1:N+m
+        x_f(n) = out_f(n) + k_lattice(m) * out_b(n);
+        x_b(n) = k_lattice(m) * out_f(n) + out_b(n);
+    end
+    
+    % The next stage is initialized by moving the calculated output
+    % sequences x_f and x_b to out_f and out_b. Note that due to the delay
+    % elements, the length of the sequences increases with 1 sample for
+    % each stage.
+    out_f(1:N+m) = x_f(1:N+m);
+    out_f(N+1+m) = 0; % The last sample equals 0 due to the window
+    out_b(1) = 0; % The firste sample equals 0 due to the delay element
+    out_b(2:N+1+m) = x_b(1:N+m);
+end
+        
+% At this point you may want to compare the PARCOR and k_lattice vectors -
+% they should contain the same values for the reflection coefficients (at
+% least with a significant number of decimals).
+
+format long
+parcor;
+k_lattice;
+
+% We now use the Matlab fuction [f,g] = latcfilt(k,x) to find the impulse
+% response of the Lattice filter. The function uses the reflection
+% coefficients in k to filter the sequence in x. The vector f contains the
+% forward result which g hold the backward result
+
+% First we generate an impulse sequence with p+1 samples. Why p+1...?
+% Because there are p+1 LPC coefficients in a p'th orden predictor.
+impulse = zeros(1,p+1);
+impulse(1) = 1;
+[f,g] = latcfilt(k_lattice,impulse);
+
+% At this point you may want to compare the content of the a-vector (the
+% LCP coefficients) with the content of the f-vector (the impulse response
+% of the Lattice filter (which is FIR, and thus equal to zero after p+1
+% samples).
+
+
+
+
+            
+
+
